@@ -3,7 +3,7 @@
 import argparse,json,os,shutil,sys,tempfile
 from pathlib import Path
 sys.dont_write_bytecode=True
-from practice import menu_text
+from practice import menu_text,configure_runtime
 
 SKILL=Path(__file__).resolve().parents[1]
 METADATA={'skill':'lukk-writing-practice','layout':4}
@@ -72,11 +72,19 @@ def atomic_write(path,raw):
 
 def probe(directory):
  # Actually create/remove only our own temporary file instead of trusting mode bits.
- fd,name=tempfile.mkstemp(prefix='.writing-access-',dir=directory)
+ fd,name=tempfile.mkstemp(prefix='.writing-access-中文 空格-',dir=directory)
  try:
-  with os.fdopen(fd,'wb') as f:f.write(b'writing-practice')
-  if Path(name).read_bytes()!=b'writing-practice':raise ValueError('目录读写检验失败')
+  with os.fdopen(fd,'wb') as f:f.write('写作练习 UTF-8 ✓'.encode('utf-8'))
+  if Path(name).read_text(encoding='utf-8')!='写作练习 UTF-8 ✓':raise ValueError('目录读写检验失败')
  finally:Path(name).unlink(missing_ok=True)
+
+def check_environment():
+ # Isolated probe: do not create a vault, bind a directory or touch real exercises.
+ with tempfile.TemporaryDirectory(prefix='writing-env-') as folder:
+  directory=Path(folder)/'中文 路径';directory.mkdir();probe(directory)
+ return {'ok':True,'python_version':sys.version.split()[0],
+         'python_executable':sys.executable,'temporary_directory':tempfile.gettempdir(),
+         'checks':['python>=3.10','utf8_read_write','unicode_and_space_paths']}
 
 def validate_source():
  required=['SKILL.md','references/流程.md','references/工具使用.md','references/方法/'+SOURCE_MENU,'scripts/practice.py','assets/01 开始练习.md','assets/02 选题库.md']
@@ -128,11 +136,17 @@ def initialize(root,vault):
  return 'created',True
 
 def main():
+ configure_runtime()
  p=argparse.ArgumentParser(description=__doc__)
- p.add_argument('--inspect',action='store_true',help='只读查看绑定与可检测的库')
+ mode=p.add_mutually_exclusive_group()
+ mode.add_argument('--inspect',action='store_true',help='只读查看绑定与可检测的库')
+ mode.add_argument('--check-env',action='store_true',help='在系统临时目录检查运行环境，不建立或绑定练习')
  p.add_argument('--root',type=Path);p.add_argument('--vault',type=Path)
  p.add_argument('--bind',action='store_true',help='将已确认目录保存在本机配置中')
  p.add_argument('--config',type=Path,default=default_config());a=p.parse_args()
+ if a.check_env:
+  if a.root or a.vault or a.bind:p.error('--check-env 不与练习目录或绑定操作混用')
+  print(json.dumps(check_environment(),ensure_ascii=False,indent=2));return
  config=a.config.expanduser().absolute()
  if a.inspect:
   if a.bind:raise ValueError('只读检查不能同时绑定')

@@ -20,6 +20,12 @@ def menu_text(raw):
   lines.append(line)
  return '\n'.join(lines)
 
+def configure_runtime():
+ # Redirected Windows output may otherwise use the system code page.
+ for stream in (sys.stdout,sys.stderr):
+  if hasattr(stream,'reconfigure'):stream.reconfigure(encoding='utf-8')
+ if sys.version_info[:2]<(3,10):fail('需要 Python 3.10 或更高版本；请使用可用的较新解释器')
+
 def digest(b):return hashlib.sha256(b).hexdigest()
 def now():return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).isoformat(timespec='seconds')
 def fail(s):raise ValueError(s)
@@ -54,7 +60,7 @@ def transaction(root,writes):
  for p in writes:
   p.parent.mkdir(parents=True,exist_ok=True)
   if p.with_name(p.name+'.pending').exists():fail('存在待核文件：'+str(p))
- with journal.open('x') as f:json.dump({str(p.relative_to(root)):digest(b) for p,b in writes.items()},f,ensure_ascii=False)
+ with journal.open('x',encoding='utf-8') as f:json.dump({str(p.relative_to(root)):digest(b) for p,b in writes.items()},f,ensure_ascii=False)
  for p,b in writes.items():
   with p.with_name(p.name+'.pending').open('xb') as f:f.write(b)
  validate()
@@ -84,6 +90,11 @@ def version_label(s):
  s=s.strip()
  if not s or len(s)>48 or any(ord(c)<32 or c in '/\\<>:"|?*' for c in s):fail('版本说明为空、过长或含文件名特殊字符')
  return s
+
+def title_filename(title):
+ # Only the folder spelling changes; the article heading and state keep the title.
+ name=title.translate(str.maketrans('<>:"|?*','＜＞：＂｜？＊'))
+ return name.rstrip('.')+'．'*(len(name)-len(name.rstrip('.')))
 
 def version_name(m,v):
  version(v);label=m.get('version_labels',{}).get(v)
@@ -117,7 +128,7 @@ def method(root,id):
  if not rev:fail('方法缺少版本')
  return {'id':id,'revision':rev[1],'file':str(p.relative_to(SKILL)),'sha256':digest(s.encode()),'source':'skill:lukk-writing-practice'}
 
-def link(label,path):return '['+label+']('+quote(str(path),safe='/#')+')'
+def link(label,path):return '['+label+']('+quote(str(path).replace('\\','/'),safe='/')+')'
 def retain_outcome(m):
  base=m.get('base_version');target=m['current_version']
  if not base or base==target or not m.get('training_complete') or not any(m.get('outcome',{}).values()):return
@@ -411,9 +422,9 @@ def run(root,a):
  if a.command=='index':index(root);return {'index':'updated'}
  if a.command=='new':
   title=a.title.strip()
-  if not title or len(title)>100 or any(x in title for x in '/\\\n\r|'):fail('题目为空、过长或含路径字符')
+  if not title or len(title)>100 or any(ord(x)<32 or x in '/\\' for x in title):fail('题目为空、过长或含路径字符')
   nums=[int(p.stem[1:]) for p in (root/'.writing-practice/状态').glob('W*.json') if PID.fullmatch(p.stem)]
-  id='W'+str(max(nums,default=0)+1).zfill(3);folder=inside(root,'00 我的练习/'+id+' '+title)
+  id='W'+str(max(nums,default=0)+1).zfill(3);folder=inside(root,'00 我的练习/'+id+' '+title_filename(title))
   if folder.exists():fail('练习已存在')
   m={'schema':2,'id':id,'title':title,'stage':'plan','current_version':'V01','selected_version':'','accepted_version':'','method':'','objective':'','training_complete':False,'submissions':{},'reviews':[],'created_at':now(),'training_map':empty_map()}
   m['version_labels']={'V01':version_label(a.label or ('从已有记录导入原稿' if a.draft else '从空白开始写初稿'))}
@@ -428,11 +439,11 @@ def run(root,a):
   save(root,folder,m,reflection)
  elif a.command=='record':
   if m['stage']=='closed':fail('已结束练习；明确继续时先用next准备工作稿')
-  d=json.loads(Path(a.input).read_text())
+  d=json.loads(Path(a.input).read_text(encoding='utf-8-sig'))
   if 'training_map' in d:fail('地图结果须随review核验当前稿；record不能代替全文复核')
   m=validate_update(root,m,d)
   if 'learner_reflection' in d:reflection='\n'+d['learner_reflection'].strip()+'\n'
-  if a.note and 'process_note' not in d:m['process_note']=Path(a.note).read_text().strip()
+  if a.note and 'process_note' not in d:m['process_note']=Path(a.note).read_text(encoding='utf-8-sig').strip()
   save(root,folder,m,reflection)
  elif a.command=='submit':
   if m['stage']=='closed':fail('已结束练习；明确继续时先用next准备工作稿')
@@ -481,9 +492,9 @@ def run(root,a):
   v=m['current_version'];verify(root,folder,m,v)
   if m['stage'] not in {'compare','wrap'}:fail('当前不是待评价的提交稿')
   if getattr(a,'sha256',None)!=m['submissions'][v]['sha256']:fail('反馈快照不匹配，请核对最新全文和submit返回的sha256')
-  feedback=Path(a.input).read_text()
+  feedback=Path(a.input).read_text(encoding='utf-8-sig')
   if not feedback.strip():fail('反馈不能为空')
-  d=json.loads(Path(a.summary).read_text())
+  d=json.loads(Path(a.summary).read_text(encoding='utf-8-sig'))
   if not isinstance(d,dict) or d.get('stage') not in {'plan','practice','wrap'}:fail('反馈须明确stage为plan、practice或wrap；不自动推断是否继续训练')
   pending=m.get('pending_result')
   if pending and ('outcome' not in d or (pending.get('version_notes') and 'version_notes' not in d)):fail('新稿须明确复核outcome及此前版本成果；不适用的项可明确清空')
@@ -593,6 +604,7 @@ def check(root):
  return {'ok':not errors,'practice_count':len(states),'errors':errors,'pending_drafts':pending}
 
 def main():
+ configure_runtime()
  ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--root',type=Path,required=True)
  sub=ap.add_subparsers(dest='command',required=True)
  p=sub.add_parser('new');p.add_argument('--title',required=True);p.add_argument('--draft');p.add_argument('--label',help='V01来源说明；默认区分导入原稿与从空白起稿')
