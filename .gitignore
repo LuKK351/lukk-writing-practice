@@ -1,0 +1,19 @@
+# Local OS and Python artifacts
+.DS_Store
+__pycache__/
+*.py[cod]
+
+# Local credentials and configuration
+.env
+.env.*
+/workspace.json
+
+# Personal writing data never belongs in this Skill repository
+.writing-practice/
+/00 我的练习/
+/01 开始练习.md
+/02 选题库.md
+/03 练习方法.md
+
+# Templates under assets/ are part of the Skill
+!assets/*.md
