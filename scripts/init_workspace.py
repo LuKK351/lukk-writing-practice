@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """连接用户指定的 Obsidian 练习目录；只初始化个人文件，不复制 Skill 规则。"""
-import argparse,json,os,shutil,sys,tempfile
+import argparse,json,os,sys,tempfile
 from pathlib import Path
 sys.dont_write_bytecode=True
 from practice import menu_text,configure_runtime
@@ -122,17 +122,21 @@ def initialize(root,vault):
   changed=not menu.exists() or menu_text(menu.read_bytes())!=menu_text(raw)
   if changed:atomic_write(menu,raw)
   return 'already_initialized',changed
+ # Keep the user's directory in place so open vaults see ordinary create events.
+ # Load resources first, then create exclusively; publish the layout marker last.
+ files={name:(SKILL/'assets'/name).read_bytes() for name in ['01 开始练习.md','02 选题库.md']}
+ files[MENU]=(SKILL/'references/方法'/SOURCE_MENU).read_bytes()
  root.parent.mkdir(parents=True,exist_ok=True);probe(root.parent)
- stage=Path(tempfile.mkdtemp(prefix='.writing-init-',dir=root.parent))
- try:
-  for rel in ['01 开始练习.md','02 选题库.md']:shutil.copy2(SKILL/'assets'/rel,stage/rel)
-  shutil.copy2(SKILL/'references/方法'/SOURCE_MENU,stage/MENU)
-  for rel in ['00 我的练习','.writing-practice/状态']:(stage/rel).mkdir(parents=True,exist_ok=True)
-  (stage/META).write_text(json.dumps(METADATA,ensure_ascii=False)+'\n',encoding='utf-8')
-  if root.exists():root.rmdir() # Fails rather than overwriting files added concurrently.
-  os.rename(stage,root)
- finally:
-  if stage.exists():shutil.rmtree(stage)
+ root.mkdir(exist_ok=True)
+ if any(root.iterdir()):raise ValueError('目标目录在初始化前已有内容；保留原件，先核对')
+ for rel in ['00 我的练习','.writing-practice','.writing-practice/状态']:
+  (root/rel).mkdir()
+ for rel,raw in files.items():
+  with (root/rel).open('xb') as f:f.write(raw)
+ for rel,raw in files.items():
+  if (root/rel).read_bytes()!=raw:raise ValueError('初始化文件读取核验失败：'+rel)
+ with (root/META).open('x',encoding='utf-8') as f:
+  f.write(json.dumps(METADATA,ensure_ascii=False)+'\n')
  return 'created',True
 
 def main():
@@ -163,7 +167,8 @@ def main():
   if a.bind:
    binding={'schema':2,'root':str(root),'vault':str(vault)}
    if config_read(config)!=binding:atomic_write(config,(json.dumps(binding,ensure_ascii=False,indent=2)+'\n').encode())
-  result={'result':result,'root':str(root),'vault':str(vault),'bound':a.bind,'menu_synced':changed,'config':str(config)}
+  entry=root/'01 开始练习.md';entry.read_text(encoding='utf-8')
+  result={'result':result,'root':str(root),'vault':str(vault),'bound':a.bind,'menu_synced':changed,'config':str(config),'entry_file':str(entry)}
  print(json.dumps(result,ensure_ascii=False,indent=2))
 if __name__=='__main__':
  try:main()
