@@ -134,7 +134,7 @@ def retain_outcome(m):
  if not base or base==target or not m.get('training_complete') or not any(m.get('outcome',{}).values()):return
  notes=m.setdefault('version_notes',[])
  if any(x['from_version']==base and x['to_version']==target for x in notes):return
- content=['**练了什么：** '+m.get('objective','')]
+ content=['**本轮目标：** '+m.get('objective','')]
  for key,label in [('before','改前'),('after','改后'),('benefit','收益'),('tradeoff','取舍'),('takeaway','可复用的方法')]:
   if m['outcome'].get(key):content.append('**'+label+'：** '+m['outcome'][key])
  for key,label in [('assistance','帮助程度'),('evidence_limit','检验边界')]:
@@ -159,7 +159,7 @@ def read_token(root,folder,m):
  return digest(read(state_path(root,m['id']))+b'\0'+read(folder/'R01 练习记录.md')+b'\0'+read(draft_path(root,folder,m,m['current_version'])))
 
 def require_read(root,folder,m,a):
- if 'training_map' in m and getattr(a,'read_token',None)!=read_token(root,folder,m):
+ if ('training_map' in m or a.command=='refresh') and getattr(a,'read_token',None)!=read_token(root,folder,m):
   fail('请先status --read回读最新练习页与全文，再传本轮read-token；内容变化后旧凭据失效')
 
 def validate_map(mp,old=None):
@@ -187,9 +187,26 @@ def validate_map(mp,old=None):
 def map_blockers(mp,content_only=False):
  return [x['id'] for x in mp['items'] if (not content_only or x['kind']=='content') and (x['level']=='required' and x['status'] not in {'resolved','withdrawn'} or x['status'] in {'active','selected'})]
 
+def sentence(s):
+ s=s.strip().rstrip('；;')
+ return s if not s or s.endswith(('。','！','？','.','!','?','…','：',':')) else s+'。'
+
+def map_criteria(items):
+ # Group only identical bases (apart from trailing separators), never infer equivalence.
+ groups={}
+ for x in items:groups.setdefault((x['kind'],x['basis'].strip().rstrip('。；;')),[]).append(x)
+ lines=[]
+ for (_,basis),group in groups.items():
+  if len(group)==1:
+   x=group[0];lines.append('**'+x['id']+'** '+sentence(basis)+' 检验：'+x['check'])
+  else:
+   lines.append('**共同依据（'+'、'.join(x['id'] for x in group)+'）** '+sentence(basis))
+   lines.extend('**'+x['id']+'** 检验：'+x['check'] for x in group)
+ return lines
+
 def map_lines(m):
  mp=m['training_map'];fresh=map_current(m);lines=['## 全文训练地图','', '**本篇目的：** '+(mp['purpose'] or '先完成初稿，再确定全文地图。')]
- if mp['strengths']:lines+=['','**已经成立、应当保留：** '+'；'.join(mp['strengths'])]
+ if mp['strengths']:lines+=['','**已经成立、应当保留：**','']+['- '+x for x in mp['strengths']]
  if not fresh:lines+=['','**地图待复核：** 以下状态尚未核验为当前稿结果；不能据此宣布完成。']
  lines+=['','| 事项与影响 | 等级 | 处理方向 | 状态／结果 |','|---|---|---|---|']
  for x in mp['items']:
@@ -199,7 +216,7 @@ def map_lines(m):
   lines+=['| '+cell(x['id']+' '+x['problem'])+' | '+('必须处理' if x['level']=='required' else '可选优化')+' | '+cell(x['action'])+' | '+cell(label+('：'+x['result'] if x['result'] else ''))+' |']
  done=fresh and mp['proofread']['status']=='checked'
  lines+=['| **最后：全文字词句检查** | 固定收尾步骤 | 内容确定后通读全文，一次列齐必改与可选项 | '+('已完整检查；各项处理见上表' if done else '未完成／待最后检查')+' |']
- criteria=['**'+x['id']+'** '+x['basis']+'；检验：'+x['check'] for x in mp['items']]
+ criteria=map_criteria(mp['items'])
  if mp['proofread']['note']:criteria+=['全文校对说明：'+mp['proofread']['note']]
  lines+=folded('地图的检验依据','\n\n'.join(criteria))
  return lines
@@ -245,14 +262,16 @@ def page_text(m,reflection):
    if m.get(key):details+=['**'+title+'：** '+m[key],'']
   if m.get('steps'):details+=['**怎么练：** '+' → '.join(m['steps']),'']
  if m.get('decisions'):details+=['**已作的选择：**']+['- '+x for x in m['decisions']]+['']
- if m.get('process_note'):details+=[m['process_note']]
- lines+=folded('本轮说明与依据','\n'.join(details))
+ if not closed and m.get('process_note'):details+=[m['process_note']]
+ lines+=folded('已确认的选择' if closed else '本轮说明与依据','\n'.join(details))
  if m.get('version_notes'):
   lines+=['','## 版本变化']
   for entry in m['version_notes']:lines+=folded(entry['from_version']+' → '+entry['to_version']+'｜具体变化与取舍',entry['content'])
  help_notes=[]
- for key,title in [('assistance','实际帮助'),('evidence_limit','观察边界')]:
-  if m.get(key):help_notes+=['**'+title+'：** '+m[key],'']
+ for key,title,prior_title in [('assistance','实际帮助','帮助程度'),('evidence_limit','观察边界','检验边界')]:
+  repeated=any(('**'+prior_title+'：** '+m.get(key,'')) in entry['content'].split('\n\n') for entry in m.get('version_notes',[]))
+  if m.get(key) and not repeated:
+   help_notes+=['**'+title+'：** '+m[key],'']
  lines+=folded('帮助与观察边界','\n'.join(help_notes))
  lines+=['','---','',REFLECTION.rstrip(),'']
  return '\n'.join(lines)+reflection
@@ -292,6 +311,17 @@ def validate_update(root,m,data):
  if n.get('selected_version'):
   version(n['selected_version'])
   if not draft_path(root,locate(root,m['id']),n,n['selected_version']).is_file():fail('选用稿不存在')
+ return n
+
+def correct_record(root,m,data):
+ # Correct explanations without reopening a finished exercise or certifying new work.
+ fields={'completion_summary','decisions','process_note','version_notes','assistance','evidence_limit','outcome','training_map'}
+ if not isinstance(data,dict) or set(data)-fields:fail('记录整理只接受说明与依据字段，不能改变阶段、版本或完成状态')
+ n=validate_update(root,m,data)
+ if 'training_map' in data:
+  def evidence(mp):
+   return (mp['checked_version'],mp['checked_sha256'],mp['proofread']['status'],[(x['id'],x['level'],x['kind'],x['status']) for x in mp['items']])
+  if 'training_map' not in m or evidence(n['training_map'])!=evidence(m['training_map']):fail('记录整理不能改变地图事项、分级、结果状态或稿件绑定；须按练习流程复核')
  return n
 
 def page_backup(root,folder,raw):
@@ -436,6 +466,11 @@ def run(root,a):
  folder,m,reflection=load(root,a.id,accept_page_change=accept_page)
  if a.command in {'record','review','next','close'}:require_read(root,folder,m,a)
  if a.command=='refresh':
+  if getattr(a,'input',None):
+   require_read(root,folder,m,a)
+   verify(root,folder,m,m['current_version'])
+   if m.get('training_map') and not map_current(m):fail('地图待复核，请先检阅当前稿；记录整理不代替review')
+   m=correct_record(root,m,json.loads(Path(a.input).read_text(encoding='utf-8-sig')))
   save(root,folder,m,reflection)
  elif a.command=='record':
   if m['stage']=='closed':fail('已结束练习；明确继续时先用next准备工作稿')
@@ -536,7 +571,7 @@ def run(root,a):
   if a.version!=m['current_version']:
    m.pop('pending_result',None)
    m.update(outcome={},training_complete=False,base_version='',process_note='',assistance='',completion_summary='按本人选择采用'+a.version+'结束；较后版本的修改不计作本次采用稿的收益。',evidence_limit='本次选择较早稿件；没有将后续版本的收益套用到采用稿。')
-  m.update(stage='closed',accepted_version=a.version,selected_version=a.version,current_version=a.version,next_action='本次已结束，采用'+a.version+'。以后可换新题再练。')
+  m.update(stage='closed',accepted_version=a.version,selected_version=a.version,current_version=a.version,steps=[],next_action='本次已结束，采用'+a.version+'。以后可换新题再练。')
   save(root,folder,m,reflection,'本人明确结束并采用'+a.version+'：'+a.reason)
  elif a.command=='recover':
   if not a.reason.strip():fail('须有保留修改并恢复旧版的授权')
@@ -622,6 +657,9 @@ def main():
  for cmd in ['status','refresh']:
   p=sub.add_parser(cmd);p.add_argument('id')
   if cmd=='status':p.add_argument('--read',action='store_true',help='返回最新全文、R01、地图与本轮读取凭据，不写文件')
+  else:
+   p.add_argument('--input',help='仅整理记录说明与依据，不改变训练状态；须先回读')
+   p.add_argument('--read-token')
  sub.add_parser('check');sub.add_parser('index')
  a=ap.parse_args();root=a.root.expanduser().resolve()
  if not (root/'.writing-practice/workspace.json').is_file() or json_read(inside(root,'.writing-practice/workspace.json'))!={'skill':'lukk-writing-practice','layout':4}:fail('请先用本Skill的scripts/init_workspace.py连接练习目录')
