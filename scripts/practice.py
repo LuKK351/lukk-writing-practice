@@ -6,7 +6,7 @@ from urllib.parse import quote
 
 PID=re.compile(r'W\d{3,6}\Z'); VER=re.compile(r'V\d{2,6}\Z')
 STAGES={'plan':'约定本次练习','practice':'本人尝试中','compare':'对照检验中','wrap':'整篇待收尾','closed':'本次已结束'}
-ALLOWED={'objective','why','method','steps','output','stop','stage','training_complete','selected_version','outcome','remaining','next_action','overview','decisions','assistance','evidence_limit','learner_reflection','base_version','version_notes','process_note','completion_summary','training_map'}
+ALLOWED={'objective','why','method','steps','output','stop','stage','training_complete','selected_version','outcome','remaining','next_action','overview','decisions','assistance','evidence_limit','learner_reflection','base_version','version_notes','process_note','completion_summary','training_map','content_review','teaching'}
 OBS={}
 SKILL=Path(__file__).resolve().parents[1]
 def menu_text(raw):
@@ -187,6 +187,28 @@ def validate_map(mp,old=None):
 def map_blockers(mp,content_only=False):
  return [x['id'] for x in mp['items'] if (not content_only or x['kind']=='content') and (x['level']=='required' and x['status'] not in {'resolved','withdrawn'} or x['status'] in {'active','selected'})]
 
+CONTENT_DIMENSIONS={'center','materials','paragraphs','order','ending'}
+def validate_content_review(r):
+ keys={'status','dimensions','priority','pending_choices','checked_version','checked_sha256'}
+ if not isinstance(r,dict) or set(r)!=keys:fail('内容审核字段不完整')
+ if r['status'] not in {'checked','ready'}:fail('内容审核状态须为checked或ready')
+ d=r['dimensions']
+ if not isinstance(d,dict) or set(d)!=CONTENT_DIMENSIONS or any(not isinstance(v,str) or not v.strip() for v in d.values()):fail('须逐项说明中心、材料、段落、顺序和结尾的具体审核依据')
+ if any(not isinstance(r[k],str) for k in ['priority','checked_version','checked_sha256']) or not r['priority'].strip():fail('须说明内容处理优先级及取舍')
+ if not isinstance(r['pending_choices'],list) or any(not isinstance(x,str) or not x.strip() for x in r['pending_choices']):fail('待选择内容事项须为ID数组')
+ if r['status']=='ready' and r['pending_choices']:fail('高影响内容建议尚待选择，不能标记可进入词句')
+ return r
+
+def content_ready(m,sha):
+ r=m.get('content_review',{})
+ return bool(sha and r.get('status')=='ready' and not r.get('pending_choices') and r.get('checked_version')==m['current_version'] and r.get('checked_sha256')==sha)
+
+def validate_teaching(t):
+ keys={'source','mechanism','example_type','example','comparison','application','check'}
+ if not isinstance(t,dict) or set(t)!=keys or any(not isinstance(v,str) or not v.strip() for v in t.values()):fail('带练须有书中方法来源、机制、相关示例、差别与取舍、本文尝试和检验标准')
+ if t['example_type'] not in {'book_summary','book_quote','original_comparison'}:fail('示例须区分书例摘要、书中短引或原创对照')
+ return t
+
 def sentence(s):
  s=s.strip().rstrip('；;')
  return s if not s or s.endswith(('。','！','？','.','!','?','…','：',':')) else s+'。'
@@ -230,6 +252,15 @@ def page_text(m,reflection):
   if m.get('close_with_unfinished'):lines+=['','**带遗留事项结束：** '+m.get('close_reason','')+'；不代表全部问题已解决。']
   lines+=['','## 本篇小结','',m.get('completion_summary') or m.get('next_action') or '本次已结束。']
  else:
+  cr=m.get('content_review')
+  fresh=map_current(m) and cr and cr.get('checked_version')==m['current_version'] and cr.get('checked_sha256')==m.get('training_map',{}).get('checked_sha256')
+  marker=('已完成；可进入词句' if cr['status']=='ready' else '已完成检查；内容仍待处理或选择') if fresh else '未完成或稿件已变化，待复核'
+  lines+=['','**内容审核：'+marker+'。**']
+  if cr:lines+=['','审核对象：'+cr.get('checked_version','')+'／'+cr.get('checked_sha256','')[:12]+'；正文改变后须重新核验。']
+  if cr:
+   labels={'center':'中心','materials':'材料','paragraphs':'段落作用','order':'顺序与结构','ending':'结尾'}
+   body=[labels[k]+'：'+cr['dimensions'][k] for k in labels]+['优先级与取舍：'+cr['priority']]
+   lines+=folded('内容审核依据', '\n\n'.join(body))
   if 'training_map' in m:lines+=['']+map_lines(m)
   lines+=['','## 现在做什么','',m.get('next_action') or '先确定这次想练的一个动作。']
   lines+=['','**'+pair+'本轮目的：** '+(m.get('objective') or '待约定')]
@@ -262,6 +293,9 @@ def page_text(m,reflection):
    if m.get(key):details+=['**'+title+'：** '+m[key],'']
   if m.get('steps'):details+=['**怎么练：** '+' → '.join(m['steps']),'']
  if m.get('decisions'):details+=['**已作的选择：**']+['- '+x for x in m['decisions']]+['']
+ if not closed and m.get('teaching'):
+  t=m['teaching'];labels={'source':'方法来源','mechanism':'如何起作用','example_type':'示例类型','example':'相关示例','comparison':'差别与取舍','application':'本文尝试','check':'怎样检验'}
+  details += [labels[k]+'：'+t[k] for k in labels]
  if not closed and m.get('process_note'):details+=[m['process_note']]
  lines+=folded('已确认的选择' if closed else '本轮说明与依据','\n'.join(details))
  if m.get('version_notes'):
@@ -283,6 +317,8 @@ def validate_update(root,m,data):
   if k in lists:
    if not isinstance(v,list) or any(not isinstance(x,str) for x in v):fail(k+'须为文本数组')
   elif k=='training_map':validate_map(v,m.get('training_map'))
+  elif k=='content_review':validate_content_review(v)
+  elif k=='teaching':validate_teaching(v)
   elif k=='version_notes':
    if not isinstance(v,list):fail('version_notes须为版本记录数组')
    seen=set()
@@ -302,6 +338,14 @@ def validate_update(root,m,data):
  if 'stage' in data and data['stage'] not in {'plan','practice','compare','wrap'}:fail('结束必须使用close')
  n={**m,**{k:v for k,v in data.items() if k!='learner_reflection'}}
  if 'training_map' in n and n.get('stage')=='wrap' and map_blockers(n['training_map'],content_only=True):fail('地图仍有必须处理或正在练的内容事项，不能直接进入最后校对')
+ if 'content_review' in data:
+  ids={x['id'] for x in n.get('training_map',{}).get('items',[]) if x['kind']=='content' and x['status'] not in {'resolved','kept','withdrawn'}}
+  if not set(n['content_review']['pending_choices'])<=ids:fail('内容待选择项须指向地图中的未处理内容事项')
+ if 'content_review' in data and n['content_review']['status']=='ready' and map_blockers(n.get('training_map',empty_map()),content_only=True):fail('内容仍有必须处理或正在练的事项，不能标记ready')
+ if n.get('stage')=='wrap' and ('stage' in data or 'content_review' in data):
+  sha=digest(read(draft_path(root,locate(root,n['id']),n,n['current_version'])))
+  if not content_ready(n,sha):fail('进入词句前须通过review留下对应当前全文的内容审核完成标记及取舍')
+ if n.get('stage')=='practice' and (data.get('stage')=='practice' or any(k in data and data[k]!=m.get(k) for k in ['objective','method','steps','stop'])) and 'teaching' not in data:fail('本轮带练须显式提供方法与示例，不能沿用未复核的旧教学')
  if 'outcome' in data:n['outcome']={**m.get('outcome',{}),**data['outcome']}
  if n.get('base_version'):
   version(n['base_version'])
@@ -389,6 +433,9 @@ def status(root,id,include_read=False):
   state_raw,page_raw,raw=[read(p) for p in paths]
   if json.loads(state_raw)!=m or any(p.read_bytes()!=b for p,b in zip(paths,[state_raw,page_raw,raw])):fail('读取期间文件发生变更，请重新status --read')
   result.update(read_token=digest(state_raw+b'\0'+page_raw+b'\0'+raw),draft_text=raw.decode(),practice_page=page_raw.decode(),training_map=m.get('training_map'),map_current=map_current(m,digest(raw)))
+  cr=m.get('content_review',{})
+  result.update(content_review=cr,content_review_current=bool(cr and cr.get('checked_version')==current and cr.get('checked_sha256')==digest(raw)),content_ready=content_ready(m,digest(raw)))
+  if cr and not result['content_review_current']:result['warning']='正文或版本已变化；R01中旧内容审核标记不适用于当前全文。'
  return result
 
 def new_version(folder):
@@ -475,7 +522,7 @@ def run(root,a):
  elif a.command=='record':
   if m['stage']=='closed':fail('已结束练习；明确继续时先用next准备工作稿')
   d=json.loads(Path(a.input).read_text(encoding='utf-8-sig'))
-  if 'training_map' in d:fail('地图结果须随review核验当前稿；record不能代替全文复核')
+  if 'training_map' in d or 'content_review' in d:fail('地图及内容审核标记须随review核验当前稿；record不能代替全文复核')
   m=validate_update(root,m,d)
   if 'learner_reflection' in d:reflection='\n'+d['learner_reflection'].strip()+'\n'
   if a.note and 'process_note' not in d:m['process_note']=Path(a.note).read_text(encoding='utf-8-sig').strip()
@@ -513,6 +560,7 @@ def run(root,a):
   m.setdefault('version_decisions',[]).append({'from':v,'to':n,'basis':a.basis,'reason':a.reason,'at':now()})
   m.pop('close_with_unfinished',None);m.pop('close_reason',None)
   m['working_copy_from']=v
+  if a.cleanup and not content_ready(m,digest(raw)):fail('仅校对建版前须有当前稿内容审核完成且可进入词句的标记')
   if a.cleanup and 'training_map' in m and map_blockers(m['training_map'],content_only=True):fail('仍有内容事项，不能以收尾建版跳过')
   if a.cleanup:
    m.update(current_version=n,stage='wrap',next_action='仅校对或整理全文；已有训练成果保留，不新增训练。')
@@ -531,6 +579,9 @@ def run(root,a):
   if not feedback.strip():fail('反馈不能为空')
   d=json.loads(Path(a.summary).read_text(encoding='utf-8-sig'))
   if not isinstance(d,dict) or d.get('stage') not in {'plan','practice','wrap'}:fail('反馈须明确stage为plan、practice或wrap；不自动推断是否继续训练')
+  if 'content_review' not in d:fail('全文检阅须提交中心、材料、段落、顺序、结尾的审核记录')
+  cr=validate_content_review(d['content_review'])
+  cr.update(checked_version=v,checked_sha256=m['submissions'][v]['sha256'])
   pending=m.get('pending_result')
   if pending and ('outcome' not in d or (pending.get('version_notes') and 'version_notes' not in d)):fail('新稿须明确复核outcome及此前版本成果；不适用的项可明确清空')
   if 'training_map' in m or 'training_map' in d:
@@ -561,9 +612,12 @@ def run(root,a):
     mp=payload['summary'].get('training_map')
     if not mp:fail('较早稿没有对应地图，不能套用后续结论；明确继续后先复核该稿')
     m['training_map']=mp
+    m['content_review']=payload['summary'].get('content_review',{})
    mp=m['training_map'];validate_map(mp)
    if mp['checked_version']!=a.version or mp['checked_sha256']!=m['submissions'][a.version]['sha256']:fail('地图未核验采用稿，请先review')
-   unfinished=bool(map_blockers(mp) or mp['proofread']['status']!='checked')
+   cr=m.get('content_review',{})
+   content_done=cr.get('status')=='ready' and not cr.get('pending_choices') and cr.get('checked_version')==a.version and cr.get('checked_sha256')==m['submissions'][a.version]['sha256']
+   unfinished=bool(not content_done or map_blockers(mp) or mp['proofread']['status']!='checked')
    if unfinished and not a.allow_unfinished:fail('必要事项或最后全文校对尚未完成；本人明确保留遗留并结束时才可allow-unfinished')
    m['close_with_unfinished']=unfinished
    m['close_reason']=a.reason
