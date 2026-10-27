@@ -226,87 +226,88 @@ def map_criteria(items):
    lines.extend('**'+x['id']+'** 检验：'+x['check'] for x in group)
  return lines
 
-def map_lines(m):
- mp=m['training_map'];fresh=map_current(m);lines=['## 全文训练地图','', '**本篇目的：** '+(mp['purpose'] or '先完成初稿，再确定全文地图。')]
- if mp['strengths']:lines+=['','**已经成立、应当保留：**','']+['- '+x for x in mp['strengths']]
- if not fresh:lines+=['','**地图待复核：** 以下状态尚未核验为当前稿结果；不能据此宣布完成。']
- lines+=['','| 事项与影响 | 等级 | 处理方向 | 状态／结果 |','|---|---|---|---|']
- for x in mp['items']:
+def item_details(items,fresh,closed=False):
+ lines=[]
+ for x in items:
   label=MAP_STATUS[x['status']]
-  if x['level']=='optional' and x['status']=='pending':label='未选练' if m['stage']=='closed' else '待选择'
+  if x['level']=='optional' and x['status']=='pending':label='未选练' if closed else '待选择'
   if not fresh:label+='（待复核）'
-  lines+=['| '+cell(x['id']+' '+x['problem'])+' | '+('必须处理' if x['level']=='required' else '可选优化')+' | '+cell(x['action'])+' | '+cell(label+('：'+x['result'] if x['result'] else ''))+' |']
+  level='必须处理' if x['level']=='required' else '可选优化'
+  lines += ['**'+x['id']+' · '+level+' · '+label+'**','',x['problem'],'','建议：'+x['action'],'','检验：'+x['check'],'','依据：'+x['basis'],'']
+  if x['result']:lines+=['结果：'+x['result'],'']
+ return '\n'.join(lines)
+
+def map_lines(m):
+ mp=m['training_map'];fresh=map_current(m);lines=['## 全篇检查，按需回看','', '**这篇想表达：** '+(mp['purpose'] or '先写出初稿，再判断全文。')]
+ if mp['strengths']:lines+=['','值得保留：','']+['- '+x for x in mp['strengths']]
+ if not fresh:lines+=['','这份检查对应此前稿件；当前稿仍待复核。']
+ content=[x for x in mp['items'] if x['kind']=='content']
+ language=[x for x in mp['items'] if x['kind']=='language']
+ if content:
+  lines+=['','内容建议已完整列出；可选项由你决定，不必全部修改。']
+  lines+=folded('内容与结构 · '+str(len(content))+' 项',item_details(content,fresh,m['stage']=='closed'))
+ if language:
+  title='词句修改清单' if m['stage'] in {'wrap','closed'} else '词句问题 · 留到内容确定后'
+  lines+=folded(title+' · '+str(len(language))+' 项',item_details(language,fresh,m['stage']=='closed'))
  done=fresh and mp['proofread']['status']=='checked'
- lines+=['| **最后：全文字词句检查** | 固定收尾步骤 | 内容确定后通读全文，一次列齐必改与可选项 | '+('已完整检查；各项处理见上表' if done else '未完成／待最后检查')+' |']
- criteria=map_criteria(mp['items'])
- if mp['proofread']['note']:criteria+=['全文校对说明：'+mp['proofread']['note']]
- lines+=folded('地图的检验依据','\n\n'.join(criteria))
+ lines+=['','**最后：全文字词句检查** — '+('已通读检查；修改结果见清单。' if done else '尚未完成；内容确定后再检查。')]
+ if mp['proofread']['note']:lines+=folded('词句检查说明',mp['proofread']['note'])
  return lines
 
 def page_text(m,reflection):
  closed=m['stage']=='closed'
- label=('采用稿 ' if closed else '当前工作稿 ')+version_name(m,m['current_version'])
- lines=['# '+m['title'],'','**'+STAGES[m['stage']]+'**','',link(label,version_file(m,m['current_version']))]
+ label=('采用稿 ' if closed else '打开当前稿 ')+version_name(m,m['current_version'])
+ lines=['# '+m['title'],'',link(label,version_file(m,m['current_version']))]
  pair=(m['base_version']+' → '+m['current_version']+'｜') if m.get('base_version') else ''
  if closed:
-  if m.get('close_with_unfinished'):lines+=['','**带遗留事项结束：** '+m.get('close_reason','')+'；不代表全部问题已解决。']
-  lines+=['','## 本篇小结','',m.get('completion_summary') or m.get('next_action') or '本次已结束。']
+  if m.get('close_with_unfinished'):lines+=['','**带遗留事项结束：** '+m.get('close_reason','')+'；未宣称全部问题已解决。']
+  lines+=['','## 这篇练习的收获','',m.get('completion_summary') or m.get('next_action') or '本次已结束。']
  else:
   cr=m.get('content_review')
   fresh=map_current(m) and cr and cr.get('checked_version')==m['current_version'] and cr.get('checked_sha256')==m.get('training_map',{}).get('checked_sha256')
   marker=('已完成；可进入词句' if cr['status']=='ready' else '已完成检查；内容仍待处理或选择') if fresh else '未完成或稿件已变化，待复核'
   lines+=['','**内容审核：'+marker+'。**']
-  if cr:lines+=['','审核对象：'+cr.get('checked_version','')+'／'+cr.get('checked_sha256','')[:12]+'；正文改变后须重新核验。']
-  if cr:
-   labels={'center':'中心','materials':'材料','paragraphs':'段落作用','order':'顺序与结构','ending':'结尾'}
-   body=[labels[k]+'：'+cr['dimensions'][k] for k in labels]+['优先级与取舍：'+cr['priority']]
-   lines+=folded('内容审核依据', '\n\n'.join(body))
-  if 'training_map' in m:lines+=['']+map_lines(m)
-  lines+=['','## 现在做什么','',m.get('next_action') or '先确定这次想练的一个动作。']
-  lines+=['','**'+pair+'本轮目的：** '+(m.get('objective') or '待约定')]
-  if m.get('stop'):lines+=['','**做到哪里：** '+m['stop']]
-  if m.get('pending_result'):lines+=['','**新稿待复核：** 此前成果已保留，尚未确认适用于这次修改。']
-  if m.get('training_complete'):lines+=['','本轮动作已完成；按地图决定下一项或进入最后全文校对。']
-  if 'training_map' not in m and m.get('overview'):lines+=['','**全文地图：**']+['- '+x for x in m['overview']]
-  if 'training_map' not in m and m.get('remaining'):lines+=['','**剩余事项：**']+['- '+x for x in m['remaining']]
-  outcome=m.get('outcome',{})
-  if any(outcome.values()):
-   lines+=['','## '+pair+'本轮变化','']
-   for key,title in [('before','改前'),('after','改后'),('benefit','收益'),('tradeoff','取舍'),('takeaway','可复用的方法')]:
-    if outcome.get(key):lines+=['**'+title+'：** '+outcome[key],'']
- if closed and 'training_map' in m:
-  lines+=['']+map_lines(m) if m.get('close_with_unfinished') else folded('全文地图与最终处理', '\n'.join(map_lines(m)))
+  if m.get('pending_result'):lines+=['','**新稿待复核：** 下方建议与成果仍须对照最新文字确认。']
+  lines+=['','## 这轮先做什么','',m.get('objective') or '先写出你想说的内容。','',m.get('next_action') or '在当前稿开始写；写好或卡住时回来交流。']
+  if m.get('why'):lines+=['','**为什么先做这件事：** '+m['why']]
+  t=m.get('teaching') if m.get('teaching_stage', 'practice' if m['stage']=='practice' else 'plan')==m['stage'] else None
+  if t:
+   names={'book_summary':'书例摘要','book_quote':'书中短引','original_comparison':'原创对照，借用书中方法'}
+   lines+=['','## 方法和例子','',t['mechanism'],'','**'+names[t['example_type']]+'**','',t['example'],'',t['comparison'],'','方法来源：'+t['source'],'','## 在这篇里试一试','',t['application'],'','**做到这里就停：** '+t['check']]
+  else:
+   if m.get('steps'):lines+=['','怎么做：','']+[str(i)+'. '+x for i,x in enumerate(m['steps'],1)]
+   if m.get('stop'):lines+=['','**做到这里就停：** '+m['stop']]
+  if m.get('output'):lines+=['','留下什么：'+m['output']]
+  if m.get('training_complete'):lines+=['','这轮动作已完成；下一步按全篇检查中的剩余事项决定。']
+ outcome=m.get('outcome',{})
+ if any(outcome.values()) and not (closed and any(x['from_version']==m.get('base_version') and x['to_version']==m['current_version'] for x in m.get('version_notes',[]))):
+  lines+=['','## '+pair+'这轮看见的变化','']
+  for key,title in [('before','改前'),('after','改后'),('benefit','作用'),('tradeoff','取舍'),('takeaway','下次可用的方法')]:
+   if outcome.get(key):lines+=['**'+title+'：** '+outcome[key],'']
+ if 'training_map' in m:lines+=['']+map_lines(m)
+ else:
+  if m.get('overview'):lines+=folded('全文检查','\n'.join(m['overview']))
+  if m.get('remaining'):lines+=folded('剩余事项','\n'.join(m['remaining']))
+ cr=m.get('content_review')
+ if cr:
+  labels={'center':'中心','materials':'材料','paragraphs':'段落作用','order':'顺序与结构','ending':'结尾'}
+  body=[labels[k]+'：'+cr['dimensions'][k] for k in labels]+['优先级与取舍：'+cr['priority'],'审核对象：'+cr.get('checked_version','')+'／'+cr.get('checked_sha256','')[:12]+'；正文变化后须重新核验。']
+  lines+=folded('完整内容审核依据','\n\n'.join(body))
+ if m.get('version_notes'):
+  lines+=['','## 修改前后，留作回看']
+  for entry in m['version_notes']:lines+=folded(entry['from_version']+' → '+entry['to_version'],entry['content'])
  if m.get('pending_result'):
   prior=m['pending_result'];body=[]
   for key,label in [('before','改前'),('after','改后'),('benefit','收益'),('tradeoff','取舍'),('takeaway','可复用的方法')]:
-   if prior.get('outcome',{}).get(key):body+=['**'+label+'：** '+prior['outcome'][key],'']
-  for entry in prior.get('version_notes',[]):body+=[entry['from_version']+' → '+entry['to_version'],entry['content'],'']
-  lines+=folded('此前成果（对应修改前的稿件，待复核）','\n'.join(body))
- if closed and any(m.get('outcome',{}).values()) and not any(x['from_version']==m.get('base_version') and x['to_version']==m['current_version'] for x in m.get('version_notes',[])):
-  gains=[]
-  for key,title in [('before','改前'),('after','改后'),('benefit','收益'),('tradeoff','取舍'),('takeaway','可复用的方法')]:
-   if m['outcome'].get(key):gains+=['**'+title+'：** '+m['outcome'][key],'']
-  lines+=folded(pair+'本轮变化','\n'.join(gains))
+   if prior.get('outcome',{}).get(key):body += [label+'：'+prior['outcome'][key]]
+  for entry in prior.get('version_notes',[]):body += [entry['from_version']+' → '+entry['to_version'],entry['content']]
+  lines+=folded('此前成果 · 新稿尚待复核','\n\n'.join(body))
  details=[]
- if not closed:
-  for key,title in [('why','为什么练'),('output','留下什么')]:
-   if m.get(key):details+=['**'+title+'：** '+m[key],'']
-  if m.get('steps'):details+=['**怎么练：** '+' → '.join(m['steps']),'']
- if m.get('decisions'):details+=['**已作的选择：**']+['- '+x for x in m['decisions']]+['']
- if not closed and m.get('teaching'):
-  t=m['teaching'];labels={'source':'方法来源','mechanism':'如何起作用','example_type':'示例类型','example':'相关示例','comparison':'差别与取舍','application':'本文尝试','check':'怎样检验'}
-  details += [labels[k]+'：'+t[k] for k in labels]
- if not closed and m.get('process_note'):details+=[m['process_note']]
- lines+=folded('已确认的选择' if closed else '本轮说明与依据','\n'.join(details))
- if m.get('version_notes'):
-  lines+=['','## 版本变化']
-  for entry in m['version_notes']:lines+=folded(entry['from_version']+' → '+entry['to_version']+'｜具体变化与取舍',entry['content'])
- help_notes=[]
- for key,title,prior_title in [('assistance','实际帮助','帮助程度'),('evidence_limit','观察边界','检验边界')]:
-  repeated=any(('**'+prior_title+'：** '+m.get(key,'')) in entry['content'].split('\n\n') for entry in m.get('version_notes',[]))
-  if m.get(key) and not repeated:
-   help_notes+=['**'+title+'：** '+m[key],'']
- lines+=folded('帮助与观察边界','\n'.join(help_notes))
+ if m.get('decisions'):details+=['已确认的选择：']+['- '+x for x in m['decisions']]
+ if not closed and m.get('process_note'):details+=['',m['process_note']]
+ for key,title in [('assistance','AI提供的帮助'),('evidence_limit','尚未验证的部分')]:
+  if m.get(key):details+=['',title+'：'+m[key]]
+ lines+=folded('协作记录与边界','\n'.join(details))
  lines+=['','---','',REFLECTION.rstrip(),'']
  return '\n'.join(lines)+reflection
 
@@ -338,6 +339,7 @@ def validate_update(root,m,data):
  if 'stage' in data and data['stage'] not in {'plan','practice','compare','wrap'}:fail('结束必须使用close')
  n={**m,**{k:v for k,v in data.items() if k!='learner_reflection'}}
  if 'training_map' in n and n.get('stage')=='wrap' and map_blockers(n['training_map'],content_only=True):fail('地图仍有必须处理或正在练的内容事项，不能直接进入最后校对')
+ if 'teaching' in data:n['teaching_stage']=n.get('stage')
  if 'content_review' in data:
   ids={x['id'] for x in n.get('training_map',{}).get('items',[]) if x['kind']=='content' and x['status'] not in {'resolved','kept','withdrawn'}}
   if not set(n['content_review']['pending_choices'])<=ids:fail('内容待选择项须指向地图中的未处理内容事项')
